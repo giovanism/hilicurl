@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const defaultSleep = 2 * time.Second
+const (
+	defaultInterval = 2 * time.Second
+	defaultTimeout  = 60 * time.Second
+)
 
 func main() {
 	defer func() {
@@ -35,6 +38,9 @@ func main() {
 	var help bool
 	flag.BoolVar(&help, "help", false, "Print help")
 	flag.BoolVar(&help, "h", false, "Shorthand for -help")
+
+	interval := flag.Duration("interval", defaultInterval, "Interval between each request")
+	timeout := flag.Duration("timeout", defaultTimeout, "Request timeout")
 	flag.Parse()
 
 	if help {
@@ -47,7 +53,7 @@ func main() {
 	}
 
 	url := flag.Arg(0)
-	runRequests(ctx, url)
+	runRequests(ctx, url, interval, timeout)
 }
 
 func setupCloseHandler(ctx context.Context, cancel func()) {
@@ -64,20 +70,7 @@ func setupCloseHandler(ctx context.Context, cancel func()) {
 	}()
 }
 
-func request(url string) *http.Response {
-	start := time.Now()
-	res, err := http.Get(url)
-	if err != nil {
-		log.Printf("ERROR: %v", err)
-		return nil
-	}
-	elapsed := time.Since(start)
-
-	log.Printf("%s: time=%d ms\n", res.Status, elapsed.Milliseconds())
-	return res
-}
-
-func runRequests(ctx context.Context, url string) {
+func runRequests(ctx context.Context, url string, interval *time.Duration, timeout *time.Duration) {
 	log.Printf("GET %s\n", url)
 	responses := make([]*http.Response, 10)
 	for {
@@ -87,11 +80,33 @@ func runRequests(ctx context.Context, url string) {
 			printStatistics(responses)
 			return
 		default:
-			res := request(url)
-			responses = append(responses, res)
-			time.Sleep(defaultSleep)
+			go func() {
+				c := make(chan *http.Response)
+				tCtx, cancel := context.WithTimeout(ctx, *timeout)
+				defer cancel()
+				request(tCtx, url, c)
+
+				res := <-c
+				responses = append(responses, res)
+			}()
+			time.Sleep(*interval)
 		}
 	}
+}
+
+func request(ctx context.Context, url string, c chan *http.Response) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+
+	start := time.Now()
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("ERROR: %v", err)
+		c <- nil
+	}
+	elapsed := time.Since(start)
+
+	log.Printf("%s: time=%d ms\n", res.Status, elapsed.Milliseconds())
+	c <- res
 }
 
 func printStatistics(responses []*http.Response) {
@@ -105,5 +120,5 @@ func printStatistics(responses []*http.Response) {
 
 	nTout := nReq - nRes
 	fmt.Printf("%d requests transmitted, %d responses received, %.2f%% timeout",
-		   nReq, nRes, float64(nTout/nReq)*100)
+		nReq, nRes, float64(nTout/nReq)*100)
 }
