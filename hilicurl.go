@@ -74,12 +74,12 @@ func setupCloseHandler(ctx context.Context, cancel func()) {
 
 func runRequests(ctx context.Context, url string, interval *time.Duration, timeout *time.Duration) {
 	log.Printf("GET %s\n", url)
-	responses := make([]*http.Response, 10)
+	records := make([]Record, 0, 10)
 	for {
 		select {
 		case <-ctx.Done():
 			fmt.Printf("--- GET %s statistics ---\n", url)
-			printStatistics(responses)
+			printStatistics(records)
 			return
 		default:
 			go func() {
@@ -87,15 +87,16 @@ func runRequests(ctx context.Context, url string, interval *time.Duration, timeo
 				defer cancel()
 				res := request(tCtx, url)
 
-				responses = append(responses, res)
+				records = append(records, res)
 			}()
 			time.Sleep(*interval)
 		}
 	}
 }
 
-func request(ctx context.Context, url string) *http.Response {
+func request(ctx context.Context, url string) Record {
 	var t3 time.Time
+	rec := Record{}
 
 	trace := &httptrace.ClientTrace{
 		GotConn: func(_ httptrace.GotConnInfo) { t3 = time.Now() },
@@ -103,36 +104,48 @@ func request(ctx context.Context, url string) *http.Response {
 
 	ctx = httptrace.WithClientTrace(ctx, trace)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	rec.Request = req
 
 	res, err := http.DefaultClient.Do(req)
+	rec.Response = res
 	if err != nil {
 		log.Printf("ERROR: %v", err)
-		return nil
+		return rec
 	}
 
 	bytes, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("ERROR: %v", err)
-		return nil
+		return rec
 	}
 
 	t7 := time.Now()
 	elapsed := t7.Sub(t3)
 
 	log.Printf("%s: length=%d bytes time=%d ms\n", res.Status, len(bytes), elapsed.Milliseconds())
-	return res
+
+	rec.ElapsedTime = elapsed
+
+	return rec
 }
 
-func printStatistics(responses []*http.Response) {
-	nReq, nRes := len(responses), 0
+func printStatistics(records []Record) {
+	nReq, nRes := len(records), 0
 
-	for _, res := range responses {
-		if res != nil {
+	for _, rec := range records {
+		if rec.Response != nil {
 			nRes++
 		}
 	}
 
-	nTout := nReq - nRes
+	nTimeout := nReq - nRes
+	timeoutRate := float64(nTimeout) / float64(nReq) * 100
 	fmt.Printf("%d requests transmitted, %d responses received, %.2f%% timeout",
-		nReq, nRes, float64(nTout/nReq)*100)
+		nReq, nRes, timeoutRate)
+}
+
+type Record struct {
+	Request     *http.Request
+	Response    *http.Response
+	ElapsedTime time.Duration
 }
