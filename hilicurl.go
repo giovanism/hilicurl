@@ -106,6 +106,7 @@ func request(ctx context.Context, url string) Record {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	rec.Request = req
 
+	rec.Timestamp = time.Now()
 	res, err := http.DefaultClient.Do(req)
 	rec.Response = res
 	if err != nil {
@@ -124,6 +125,7 @@ func request(ctx context.Context, url string) Record {
 
 	log.Printf("%s: length=%d bytes time=%d ms\n", res.Status, len(bytes), elapsed.Milliseconds())
 
+	rec.Timestamp = t3
 	rec.ElapsedTime = elapsed
 
 	return rec
@@ -145,6 +147,7 @@ func printStatistics(records []Record) {
 }
 
 type Record struct {
+	Timestamp   time.Time
 	Request     *http.Request
 	Response    *http.Response
 	ElapsedTime time.Duration
