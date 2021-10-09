@@ -4,8 +4,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"os/signal"
 	"time"
@@ -81,12 +83,10 @@ func runRequests(ctx context.Context, url string, interval *time.Duration, timeo
 			return
 		default:
 			go func() {
-				c := make(chan *http.Response)
 				tCtx, cancel := context.WithTimeout(ctx, *timeout)
 				defer cancel()
-				request(tCtx, url, c)
+				res := request(tCtx, url)
 
-				res := <-c
 				responses = append(responses, res)
 			}()
 			time.Sleep(*interval)
@@ -94,19 +94,33 @@ func runRequests(ctx context.Context, url string, interval *time.Duration, timeo
 	}
 }
 
-func request(ctx context.Context, url string, c chan *http.Response) {
+func request(ctx context.Context, url string) *http.Response {
+	var t3 time.Time
+
+	trace := &httptrace.ClientTrace{
+		GotConn: func(_ httptrace.GotConnInfo) { t3 = time.Now() },
+	}
+
+	ctx = httptrace.WithClientTrace(ctx, trace)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 
-	start := time.Now()
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("ERROR: %v", err)
-		c <- nil
+		return nil
 	}
-	elapsed := time.Since(start)
 
-	log.Printf("%s: time=%d ms\n", res.Status, elapsed.Milliseconds())
-	c <- res
+	bytes, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("ERROR: %v", err)
+		return nil
+	}
+
+	t7 := time.Now()
+	elapsed := t7.Sub(t3)
+
+	log.Printf("%s: length=%d bytes time=%d ms\n", res.Status, len(bytes), elapsed.Milliseconds())
+	return res
 }
 
 func printStatistics(responses []*http.Response) {
