@@ -47,17 +47,7 @@ func main() {
 	}
 
 	url := flag.Arg(0)
-	log.Printf("GET %s\n", url)
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Gracefully shutting down...")
-			return
-		default:
-			request(url)
-			time.Sleep(defaultSleep)
-		}
-	}
+	runRequests(ctx, url)
 }
 
 func setupCloseHandler(ctx context.Context, cancel func()) {
@@ -74,13 +64,46 @@ func setupCloseHandler(ctx context.Context, cancel func()) {
 	}()
 }
 
-func request(url string) {
+func request(url string) *http.Response {
 	start := time.Now()
 	res, err := http.Get(url)
 	if err != nil {
 		log.Printf("ERROR: %v", err)
+		return nil
 	}
 	elapsed := time.Since(start)
 
 	log.Printf("%s: time=%d ms\n", res.Status, elapsed.Milliseconds())
+	return res
+}
+
+func runRequests(ctx context.Context, url string) {
+	log.Printf("GET %s\n", url)
+	responses := make([]*http.Response, 10)
+	for {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("--- GET %s statistics ---\n", url)
+			printStatistics(responses)
+			return
+		default:
+			res := request(url)
+			responses = append(responses, res)
+			time.Sleep(defaultSleep)
+		}
+	}
+}
+
+func printStatistics(responses []*http.Response) {
+	nReq, nRes := len(responses), 0
+
+	for _, res := range responses {
+		if res != nil {
+			nRes++
+		}
+	}
+
+	nTout := nReq - nRes
+	fmt.Printf("%d requests transmitted, %d responses received, %.2f%% timeout",
+		   nReq, nRes, float64(nTout/nReq)*100)
 }
